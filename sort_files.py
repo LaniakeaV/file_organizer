@@ -3,7 +3,10 @@ import shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import ttk
 from collections import defaultdict
+import threading
+from queue import Queue
 
 # 文件类型分类字典
 FILE_CATEGORIES = {
@@ -50,6 +53,16 @@ class FileSorterGUI:
         self.preview_text = scrolledtext.ScrolledText(preview_frame, font=("Consolas", 10), 
                                                        height=15, wrap=tk.WORD)
         self.preview_text.pack(fill=tk.BOTH, expand=True)
+        
+        # 进度条
+        progress_frame = tk.Frame(self.root)
+        progress_frame.pack(padx=20, pady=5, fill=tk.X)
+        
+        self.progress_label = tk.Label(progress_frame, text="进度: 0%", font=("微软雅黑", 9))
+        self.progress_label.pack(side=tk.LEFT, padx=5)
+        
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=300)
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
         # 操作按钮
         action_frame = tk.Frame(self.root)
@@ -125,7 +138,7 @@ class FileSorterGUI:
             self.preview_text.insert(tk.END, "\n")
     
     def restore_files(self):
-        """恢复文件分类"""
+        """恢复文件分类（后台线程）"""
         if not self.selected_path:
             messagebox.showwarning("警告", "请先选择文件夹")
             return
@@ -133,7 +146,31 @@ class FileSorterGUI:
         if not messagebox.askyesno("确认", "确定要将所有子文件夹中的文件恢复到主文件夹吗？"):
             return
         
+        # 禁用按钮，启动线程
+        self.btn_restore.config(state=tk.DISABLED)
+        self.btn_sort.config(state=tk.DISABLED)
+        self.preview_text.delete(1.0, tk.END)
+        self.preview_text.insert(tk.END, "正在恢复文件...\n")
+        self.progress_bar['value'] = 0
+        self.progress_label.config(text="进度: 0%")
+        
+        thread = threading.Thread(target=self._restore_files_thread, daemon=True)
+        thread.start()
+    
+    def _restore_files_thread(self):
+        """在后台线程中执行恢复操作"""
         try:
+            # 第一步：统计总文件数
+            total_files = sum(1 for folder in self.selected_path.iterdir() 
+                            if folder.is_dir() 
+                            for file in folder.iterdir() 
+                            if file.is_file())
+            
+            if total_files == 0:
+                self.root.after(0, lambda: messagebox.showinfo("提示", "没有文件需要恢复"))
+                self.root.after(0, self._restore_buttons_enable)
+                return
+            
             restored_count = 0
             for folder in self.selected_path.iterdir():
                 if folder.is_dir():
@@ -141,18 +178,30 @@ class FileSorterGUI:
                         if file.is_file():
                             shutil.move(str(file), str(self.selected_path / file.name))
                             restored_count += 1
+                            
+                            # 更新进度条
+                            progress = int((restored_count / total_files) * 100)
+                            self.root.after(0, lambda p=progress, c=restored_count, t=total_files: 
+                                           self._update_progress(p, c, t))
                     try:
                         folder.rmdir()
                     except:
                         pass
             
-            messagebox.showinfo("完成", f"成功恢复 {restored_count} 个文件！")
-            self.preview_classification()
+            # 完成后的回调
+            self.root.after(0, lambda: self._restore_complete(restored_count))
         except Exception as e:
-            messagebox.showerror("错误", f"恢复失败: {str(e)}")
+            self.root.after(0, lambda: messagebox.showerror("错误", f"恢复失败: {str(e)}"))
+            self.root.after(0, self._restore_buttons_enable)
+    
+    def _restore_complete(self, restored_count):
+        """恢复完成后的处理"""
+        messagebox.showinfo("完成", f"成功恢复 {restored_count} 个文件！")
+        self.preview_classification()
+        self._restore_buttons_enable()
     
     def sort_files(self):
-        """执行文件分类"""
+        """执行文件分类（后台线程）"""
         if not self.selected_path:
             messagebox.showwarning("警告", "请先选择文件夹")
             return
@@ -160,7 +209,28 @@ class FileSorterGUI:
         if not messagebox.askyesno("确认", "确定要开始分类整理文件吗？"):
             return
         
+        # 禁用按钮，启动线程
+        self.btn_restore.config(state=tk.DISABLED)
+        self.btn_sort.config(state=tk.DISABLED)
+        self.preview_text.delete(1.0, tk.END)
+        self.preview_text.insert(tk.END, "正在分类文件...\n")
+        self.progress_bar['value'] = 0
+        self.progress_label.config(text="进度: 0%")
+        
+        thread = threading.Thread(target=self._sort_files_thread, daemon=True)
+        thread.start()
+    
+    def _sort_files_thread(self):
+        """在后台线程中执行分类操作"""
         try:
+            # 第一步：统计总文件数
+            total_files = sum(1 for file in self.selected_path.iterdir() if file.is_file())
+            
+            if total_files == 0:
+                self.root.after(0, lambda: messagebox.showinfo("提示", "该文件夹中没有文件需要分类"))
+                self.root.after(0, self._sort_buttons_enable)
+                return
+            
             sorted_count = 0
             for file in self.selected_path.iterdir():
                 if file.is_file():
@@ -169,11 +239,38 @@ class FileSorterGUI:
                     dest_folder.mkdir(exist_ok=True)
                     shutil.move(str(file), str(dest_folder / file.name))
                     sorted_count += 1
+                    
+                    # 更新进度条
+                    progress = int((sorted_count / total_files) * 100)
+                    self.root.after(0, lambda p=progress, c=sorted_count, t=total_files: 
+                                   self._update_progress(p, c, t))
             
-            messagebox.showinfo("完成", f"成功分类 {sorted_count} 个文件！")
-            self.preview_classification()
+            # 完成后的回调
+            self.root.after(0, lambda: self._sort_complete(sorted_count))
         except Exception as e:
-            messagebox.showerror("错误", f"分类失败: {str(e)}")
+            self.root.after(0, lambda: messagebox.showerror("错误", f"分类失败: {str(e)}"))
+            self.root.after(0, self._sort_buttons_enable)
+    
+    def _update_progress(self, progress, current, total):
+        """更新进度条"""
+        self.progress_bar['value'] = progress
+        self.progress_label.config(text=f"进度: {progress}% ({current}/{total})")
+    
+    def _sort_complete(self, sorted_count):
+        """分类完成后的处理"""
+        messagebox.showinfo("完成", f"成功分类 {sorted_count} 个文件！")
+        self.preview_classification()
+        self._sort_buttons_enable()
+    
+    def _restore_buttons_enable(self):
+        """启用按钮"""
+        self.btn_restore.config(state=tk.NORMAL)
+        self.btn_sort.config(state=tk.NORMAL)
+    
+    def _sort_buttons_enable(self):
+        """启用按钮"""
+        self.btn_restore.config(state=tk.NORMAL)
+        self.btn_sort.config(state=tk.NORMAL)
 
 if __name__ == "__main__":
     root = tk.Tk()
