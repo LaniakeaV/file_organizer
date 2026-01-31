@@ -5,3 +5,4 @@
 - 切换中/EN
 - 跟随系统的深浅色界面
 - 可一键重新还原文件夹内子文件到文件
+- 访问 https://laniakeav.github.io/file_organizer/ 直接下载最新版
